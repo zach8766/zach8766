@@ -1,0 +1,103 @@
+import re
+
+def parse_vhdl(vhdl_script):
+    entity_pattern = r'entity\s+(\w+)\s+is'
+    port_pattern = r'port\s*\(\s*(.*?)\s*\);'
+
+    entity_name = re.search(entity_pattern, vhdl_script).group(1)
+    ports = re.search(port_pattern, vhdl_script, re.DOTALL).group(1).strip().split('\n')
+
+    port_list = []
+    for port in ports:
+        port_info = port.split(':')
+        if len(port_info) > 1:
+            port_name = port_info[0].strip()
+            port_type = port_info[1].strip().split(';')[0]
+
+            # Check for array types
+            if "array" in port_type:
+                match = re.search(r'\((\d+)\s+to\s+(\d+)\)\s+of\s+(\w+)', port_type)
+                if match:
+                    low, high, base_type = match.groups()
+                    port_list.append((port_name, f"array({low} to {high}) of {base_type}"))
+            else:
+                port_list.append((port_name, port_type))
+
+    return entity_name, port_list
+
+def generate_test_bench(entity_name, ports, clock_period=10):
+    test_bench = f"""library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity tb_{entity_name} is
+end tb_{entity_name};
+
+architecture behavior of tb_{entity_name} is
+    signal clk : std_logic := '0';
+    signal reset : std_logic := '0';
+"""
+
+    # Add port signals
+    for port_name, port_type in ports:
+        if "array" in port_type:
+            array_dimensions = re.search(r'array\((\d+)\s+to\s+(\d+)\)\s+of\s+(\w+)', port_type)
+            if array_dimensions:
+                low, high, base_type = array_dimensions.groups()
+                test_bench += f"    signal {port_name} : {port_type};\n"
+        else:
+            test_bench += f"    signal {port_name} : {port_type};\n"
+
+    test_bench += f"\nbegin\n"
+    
+    # Instantiate the design under test (UUT)
+    test_bench += f"    uut: entity work.{entity_name}\n"
+    test_bench += f"        port map (\n"
+    
+    for port_name, _ in ports:
+        test_bench += f"            {port_name} => {port_name},\n"
+    
+    test_bench = test_bench.rstrip(',\n') + "\n        );\n"
+
+    # Clock process
+    test_bench += f"\n    clk_process : process\n"
+    test_bench += f"    begin\n"
+    test_bench += f"        clk <= '0';\n"
+    test_bench += f"        wait for {clock_period / 2} ns;\n"
+    test_bench += f"        clk <= '1';\n"
+    test_bench += f"        wait for {clock_period / 2} ns;\n"
+    test_bench += "    end process;\n"
+
+    # Reset process
+    test_bench += "\n    reset_process : process\n"
+    test_bench += "    begin\n"
+    test_bench += "        reset <= '1';\n"
+    test_bench += "        wait for 20 ns;\n"
+    test_bench += "        reset <= '0';\n"
+    test_bench += "        wait;\n"
+    test_bench += "    end process;\n"
+
+    # Initialize array signals (example initialization)
+    for port_name, port_type in ports:
+        if "array" in port_type:
+            low, high, base_type = re.search(r'(\d+)\s+to\s+(\d+)', port_type).groups()
+            test_bench += f"\n    -- Initialize {port_name}\n"
+            test_bench += f"    {port_name} <= (others => (others => '{base_type}'(0)));\n"
+
+    test_bench += "\nend behavior;"
+
+    return test_bench
+
+# Example usage
+if __name__ == "__main__":
+    vhdl_script = """entity my_design is
+    port (
+        a : in std_logic;
+        b : in std_logic;
+        c : out std_logic;
+        my_array : in std_logic_vector(0 to 3) := (others => '0')
+    );
+    end my_design;"""
+
+    entity_name, ports = parse_vhdl(vhdl_script)
+    test_bench = generate_test_bench(entity_name, ports, clock_period=20)  # Example clock period
+    print(test_bench)
