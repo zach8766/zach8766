@@ -1,4 +1,4 @@
-Third year Electrical & Computer Engineering 
+Third year Electrical Engineering 
 Student @ Memorial University of Newfoundland 
 Interested in VLSI, Embedded Systems, Computer Engineering
 as well as Communications, specifically Digital Signal Processing 
