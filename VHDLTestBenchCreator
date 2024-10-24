@@ -1,31 +1,63 @@
 import re
+import json
 
+# Error handling and logging
+def log_error(message):
+    print(f"ERROR: {message}")
+
+def log_info(message):
+    print(f"INFO: {message}")
+
+# Enhanced VHDL parsing function
 def parse_vhdl(vhdl_script):
     entity_pattern = r'entity\s+(\w+)\s+is'
     port_pattern = r'port\s*\(\s*(.*?)\s*\);'
+    
+    # Check for entity declaration
+    entity_match = re.search(entity_pattern, vhdl_script)
+    if not entity_match:
+        log_error("No entity declaration found in the VHDL script.")
+        return None, None
+    
+    entity_name = entity_match.group(1)
 
-    entity_name = re.search(entity_pattern, vhdl_script).group(1)
-    ports = re.search(port_pattern, vhdl_script, re.DOTALL).group(1).strip().split('\n')
-
+    # Check for port declaration
+    port_match = re.search(port_pattern, vhdl_script, re.DOTALL)
+    if not port_match:
+        log_error("No port declaration found in the VHDL script.")
+        return None, None
+    
+    ports = port_match.group(1).strip().split('\n')
     port_list = []
+    
     for port in ports:
         port_info = port.split(':')
-        if len(port_info) > 1:
-            port_name = port_info[0].strip()
-            port_type = port_info[1].strip().split(';')[0]
+        if len(port_info) < 2:
+            log_error(f"Invalid port declaration found: '{port.strip()}'.")
+            continue
 
-            # Check for array types
-            if "array" in port_type:
-                match = re.search(r'\((\d+)\s+to\s+(\d+)\)\s+of\s+(\w+)', port_type)
-                if match:
-                    low, high, base_type = match.groups()
-                    port_list.append((port_name, f"array({low} to {high}) of {base_type}"))
+        port_name = port_info[0].strip()
+        port_type = port_info[1].strip().split(';')[0]
+
+        # Check for array types and basic types
+        if "array" in port_type:
+            match = re.search(r'\((\d+)\s+to\s+(\d+)\)\s+of\s+(\w+)', port_type)
+            if match:
+                low, high, base_type = match.groups()
+                if not re.match(r'^[A-Za-z_]\w*$', base_type):
+                    log_error(f"Unsupported base type '{base_type}' in array declaration.")
+                port_list.append((port_name, f"array({low} to {high}) of {base_type}"))
             else:
-                port_list.append((port_name, port_type))
+                log_error(f"Invalid array format for port '{port_name}'.")
+        else:
+            if not re.match(r'^[A-Za-z_]\w*$', port_type):
+                log_error(f"Unsupported port type '{port_type}' for port '{port_name}'.")
+            port_list.append((port_name, port_type))
 
     return entity_name, port_list
 
-def generate_test_bench(entity_name, ports, clock_period=10):
+# Generate a test bench with enhanced features
+def generate_test_bench(entity_name, ports, clock_period=10, reset_duration=20):
     test_bench = f"""library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
@@ -40,10 +72,7 @@ architecture behavior of tb_{entity_name} is
     # Add port signals
     for port_name, port_type in ports:
         if "array" in port_type:
-            array_dimensions = re.search(r'array\((\d+)\s+to\s+(\d+)\)\s+of\s+(\w+)', port_type)
-            if array_dimensions:
-                low, high, base_type = array_dimensions.groups()
-                test_bench += f"    signal {port_name} : {port_type};\n"
+            test_bench += f"    signal {port_name} : {port_type};\n"
         else:
             test_bench += f"    signal {port_name} : {port_type};\n"
 
@@ -70,34 +99,55 @@ architecture behavior of tb_{entity_name} is
     # Reset process
     test_bench += "\n    reset_process : process\n"
     test_bench += "    begin\n"
-    test_bench += "        reset <= '1';\n"
-    test_bench += "        wait for 20 ns;\n"
+    test_bench += f"        reset <= '1';\n"
+    test_bench += f"        wait for {reset_duration} ns;\n"
     test_bench += "        reset <= '0';\n"
     test_bench += "        wait;\n"
     test_bench += "    end process;\n"
 
-    # Initialize array signals (example initialization)
+    # Initialize array signals
     for port_name, port_type in ports:
         if "array" in port_type:
-            low, high, base_type = re.search(r'(\d+)\s+to\s+(\d+)', port_type).groups()
+            low, high = re.search(r'\((\d+)\s+to\s+(\d+)\)', port_type).groups()
             test_bench += f"\n    -- Initialize {port_name}\n"
-            test_bench += f"    {port_name} <= (others => (others => '{base_type}'(0)));\n"
+            test_bench += f"    {port_name} <= (others => (others => '0'));\n"
 
     test_bench += "\nend behavior;"
 
     return test_bench
 
-# Example usage
-if __name__ == "__main__":
-    vhdl_script = """entity my_design is
-    port (
-        a : in std_logic;
-        b : in std_logic;
-        c : out std_logic;
-        my_array : in std_logic_vector(0 to 3) := (others => '0')
-    );
-    end my_design;"""
+# Function to collect user parameters for the test bench
+def collect_user_parameters():
+    print("Enter clock period (default is 10 ns):")
+    clock_period = input()
+    clock_period = int(clock_period) if clock_period else 10
 
-    entity_name, ports = parse_vhdl(vhdl_script)
-    test_bench = generate_test_bench(entity_name, ports, clock_period=20)  # Example clock period
-    print(test_bench)
+    print("Enter reset duration (default is 20 ns):")
+    reset_duration = input()
+    reset_duration = int(reset_duration) if reset_duration else 20
+
+    return clock_period, reset_duration
+
+# Main function to handle user input
+if __name__ == "__main__":
+    print("Enter your VHDL script. Type 'END' on a new line when you are done:\n")
+
+    # Read VHDL script from user input
+    vhdl_script_lines = []
+    while True:
+        line = input()
+        if line.strip() == "END":
+            break
+        vhdl_script_lines.append(line)
+
+    vhdl_script = "\n".join(vhdl_script_lines)
+
+    try:
+        entity_name, ports = parse_vhdl(vhdl_script)
+        if entity_name and ports:
+            clock_period, reset_duration = collect_user_parameters()
+            test_bench = generate_test_bench(entity_name, ports, clock_period, reset_duration)
+            print("\nGenerated Test Bench:\n")
+            print(test_bench)
+    except ValueError as e:
+        log_error(str(e))
